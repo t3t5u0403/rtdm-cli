@@ -48,7 +48,24 @@ SYSTEM_EXPLAIN = (
 
 
 class LocalBackendError(Exception):
-    """Raised when the local Ollama daemon can't be reached."""
+    """Raised when the local Ollama daemon can't be reached or errors out."""
+
+
+def _error_detail(status: int, body: bytes) -> str:
+    """Extract a printable error message from a non-200 Ollama response.
+
+    Ollama puts the human-readable reason in an ``{"error": "..."}``
+    JSON body (e.g. ``model 'x' not found``).  Fall back to the bare
+    HTTP status when the body isn't in that shape.  Scrubbed of control
+    characters because it goes straight to the user's terminal.
+    """
+    try:
+        err = json.loads(body).get("error")
+    except (ValueError, AttributeError):
+        err = None
+    if isinstance(err, str) and err.strip():
+        return strip_control_chars(err.strip())
+    return f"HTTP {status}"
 
 
 def _stream_response(resp: http.client.HTTPResponse) -> str:
@@ -113,6 +130,13 @@ def _chat(system_prompt: str, user_input: str, cfg: LocalConfig) -> str:
             headers={"Content-Type": "application/json"},
         )
         resp = conn.getresponse()
+        if resp.status != 200:
+            # Ollama reports errors (e.g. model not pulled) as a non-200
+            # JSON body, not a stream; without this check the stream
+            # reader sees no tokens and we'd exit 0 with blank output.
+            body = resp.read()
+            conn.close()
+            raise LocalBackendError(f"Ollama error: {_error_detail(resp.status, body)}")
         output = _stream_response(resp)
         conn.close()
         return output
