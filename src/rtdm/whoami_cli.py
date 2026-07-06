@@ -11,6 +11,8 @@ the secret half.
 
 from __future__ import annotations
 
+import sys
+
 from rtdm import config as config_module
 
 
@@ -18,7 +20,13 @@ _PREFIX_LEN = 16  # matches the server-side key_prefix length
 
 
 def run() -> int:
-    cfg = config_module.load_config()
+    try:
+        cfg = config_module.load_config()
+    except ValueError as exc:
+        # whoami is a debugging tool; it must degrade to a clean message,
+        # not a traceback, when the config itself is the problem.
+        print(f"rtdm: {exc}", file=sys.stderr)
+        return 1
 
     print(f"mode:     {cfg.mode}")
     if cfg.source is None:

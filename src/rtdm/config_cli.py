@@ -53,7 +53,13 @@ def run_path() -> int:
 
 def run_show() -> int:
     """Print the *effective* config (defaults + file + env override)."""
-    cfg = load_config()
+    try:
+        cfg = load_config()
+    except ValueError as exc:
+        # `config show` is the "help me debug my config" tool — it must
+        # print a clean pointer at the problem, never a traceback.
+        print(f"rtdm: {exc}", file=sys.stderr)
+        return 1
     if cfg.source is None:
         print("# (no config file; showing defaults)")
     else:

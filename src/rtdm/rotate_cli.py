@@ -26,7 +26,11 @@ _TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 
 
 def run() -> int:
-    cfg = config_module.load_config()
+    try:
+        cfg = config_module.load_config()
+    except ValueError as exc:
+        print(f"rtdm: {exc}", file=sys.stderr)
+        return 1
 
     if cfg.mode != "remote":
         print(

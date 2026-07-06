@@ -32,7 +32,11 @@ _ALLOWED_PORTAL_HOSTS = frozenset({"billing.stripe.com"})
 
 def run() -> int:
     """Entry point invoked by the dispatcher."""
-    cfg = config_module.load_config()
+    try:
+        cfg = config_module.load_config()
+    except ValueError as exc:
+        print(f"rtdm: {exc}", file=sys.stderr)
+        return 1
 
     if cfg.mode != "remote":
         print(

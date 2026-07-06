@@ -194,7 +194,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    cfg = config_module.load_config()
+    try:
+        cfg = config_module.load_config()
+    except ValueError as exc:
+        # Corrupted config file — the message already says how to fix it;
+        # a traceback here would just bury it.
+        print(f"rtdm: {exc}", file=sys.stderr)
+        return 1
     task = _resolve_task(args)
     user_input = " ".join(args.query)
 
