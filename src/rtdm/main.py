@@ -96,12 +96,17 @@ def _resolve_task(args: argparse.Namespace) -> str:
     return "query"
 
 
-def _dispatch(task: str, user_input: str, cfg: Config) -> str:
+def _dispatch(task: str, user_input: str, cfg: Config, live: bool = True) -> str:
     """Run ``task`` against the configured backend, returning the model output.
 
     Local mode raises :class:`local_backend.LocalBackendError`; remote
     mode raises :class:`remote_backend.RemoteBackendError`.  Both are
     caught at the CLI top level and printed as a single line to stderr.
+
+    ``live`` controls whether the local backend prints tokens as they
+    stream (True) or stays silent so the caller can render the finished
+    text itself (False, used for styled TTY output).  The remote backend
+    never streams, so the flag doesn't apply to it.
     """
     if cfg.mode == "remote":
         if not cfg.remote.api_key:
@@ -113,7 +118,7 @@ def _dispatch(task: str, user_input: str, cfg: Config) -> str:
         return fn(user_input, cfg.remote.api_key, cfg.remote.endpoint)
 
     fn = getattr(local_backend, task)
-    return fn(user_input, cfg.local)
+    return fn(user_input, cfg.local, live=live)
 
 
 def _run_config_subcommand(action: str) -> int:
@@ -204,8 +209,15 @@ def main(argv: list[str] | None = None) -> int:
     task = _resolve_task(args)
     user_input = " ".join(args.query)
 
+    # On a TTY we render styled output ourselves, so suppress the local
+    # backend's live token streaming and capture the full text instead.
+    # When output is piped/redirected we keep the raw behaviour untouched
+    # (local streams live, remote is printed below) so pipes, -x, and -c
+    # never see styling.
+    interactive = sys.stdout.isatty()
+
     try:
-        output = _dispatch(task, user_input, cfg)
+        output = _dispatch(task, user_input, cfg, live=not interactive)
     except local_backend.LocalBackendError as exc:
         print(f"rtdm: {exc}", file=sys.stderr)
         return 1
@@ -213,17 +225,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rtdm: {exc}", file=sys.stderr)
         return 1
 
-    # Remote backends return without having printed anything; surface
-    # the response to the user.  Local backends already streamed the
-    # text live, so we'd just be double-printing.
-    if cfg.mode == "remote":
+    if interactive:
+        # Styled presentation (command gutter bar / explain+ask panels).
+        from rtdm import pretty
+
+        pretty.render(task, output)
+    elif cfg.mode == "remote":
+        # Remote returns without printing; local already streamed live.
         print(output)
 
     if args.c:
         if local_backend.copy_to_clipboard(output):
             print("(copied to clipboard)", file=sys.stderr)
 
-    if args.x:
+    if args.x and not output.startswith("ERROR:"):
         local_backend.confirm_and_execute(output)
 
     return 0

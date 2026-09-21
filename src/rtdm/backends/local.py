@@ -68,13 +68,17 @@ def _error_detail(status: int, body: bytes) -> str:
     return f"HTTP {status}"
 
 
-def _stream_response(resp: http.client.HTTPResponse) -> str:
-    """Print tokens as they arrive; return the full concatenated string.
+def _stream_response(resp: http.client.HTTPResponse, live: bool = True) -> str:
+    """Accumulate tokens; when ``live`` is True, also print them as they arrive.
 
     Each token is scrubbed of C0/C1 control characters before being
     written to stdout or accumulated, so a compromised model cannot
     smuggle ANSI escape sequences into the user's terminal or the
     command that gets handed to ``confirm_and_execute``.
+
+    ``live=False`` suppresses the live printing so the caller can render
+    the finished text itself (e.g. styled output on a TTY); the full
+    string is returned either way.
     """
     chunks: list[str] = []
     while True:
@@ -87,13 +91,15 @@ def _stream_response(resp: http.client.HTTPResponse) -> str:
         tok = chunk.get("message", {}).get("content", "")
         if tok:
             tok = strip_control_chars(tok)
-            print(tok, end="", flush=True)
+            if live:
+                print(tok, end="", flush=True)
             chunks.append(tok)
-    print()
+    if live:
+        print()
     return strip_control_chars("".join(chunks))
 
 
-def _chat(system_prompt: str, user_input: str, cfg: LocalConfig) -> str:
+def _chat(system_prompt: str, user_input: str, cfg: LocalConfig, live: bool = True) -> str:
     """POST to Ollama's /api/chat and stream the result.
 
     Raises :class:`LocalBackendError` if the daemon isn't running.
@@ -137,7 +143,7 @@ def _chat(system_prompt: str, user_input: str, cfg: LocalConfig) -> str:
             body = resp.read()
             conn.close()
             raise LocalBackendError(f"Ollama error: {_error_detail(resp.status, body)}")
-        output = _stream_response(resp)
+        output = _stream_response(resp, live=live)
         conn.close()
         return output
     except (ConnectionRefusedError, OSError) as exc:
@@ -146,19 +152,19 @@ def _chat(system_prompt: str, user_input: str, cfg: LocalConfig) -> str:
         ) from exc
 
 
-def query(prompt: str, cfg: LocalConfig) -> str:
+def query(prompt: str, cfg: LocalConfig, live: bool = True) -> str:
     """Generate a shell command for ``prompt`` (the cmd-mode default)."""
-    return _chat(SYSTEM_CMD, prompt, cfg)
+    return _chat(SYSTEM_CMD, prompt, cfg, live=live)
 
 
-def ask(question: str, cfg: LocalConfig) -> str:
+def ask(question: str, cfg: LocalConfig, live: bool = True) -> str:
     """Answer a free-form terminal question."""
-    return _chat(SYSTEM_QNA, question, cfg)
+    return _chat(SYSTEM_QNA, question, cfg, live=live)
 
 
-def explain(command: str, cfg: LocalConfig) -> str:
+def explain(command: str, cfg: LocalConfig, live: bool = True) -> str:
     """Explain a shell command."""
-    return _chat(SYSTEM_EXPLAIN, command, cfg)
+    return _chat(SYSTEM_EXPLAIN, command, cfg, live=live)
 
 
 # ---------------------------------------------------------------------------
@@ -179,20 +185,42 @@ def copy_to_clipboard(text: str) -> bool:
     import shutil
     import subprocess
 
-    if shutil.which("wl-copy"):
-        cmd = ["wl-copy"]
-    elif shutil.which("xclip"):
-        cmd = ["xclip", "-selection", "clipboard"]
-    elif shutil.which("xsel"):
-        cmd = ["xsel", "--clipboard", "--input"]
-    else:
+    # Try each available tool in preference order. A tool can be installed
+    # yet fail at runtime (e.g. xclip with no X display on a Wayland box);
+    # fall through to the next rather than raising, so -c never crashes the
+    # CLI over a clipboard hiccup.
+    candidates = (
+        ("wl-copy", ["wl-copy"]),
+        ("xclip", ["xclip", "-selection", "clipboard"]),
+        ("xsel", ["xsel", "--clipboard", "--input"]),
+    )
+    found = False
+    for tool, cmd in candidates:
+        if not shutil.which(tool):
+            continue
+        found = True
+        try:
+            subprocess.run(
+                cmd,
+                input=text.encode(),
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except (subprocess.SubprocessError, OSError):
+            continue
+    if not found:
         print(
-            "No clipboard tool found (install wl-copy, xclip, or xsel)",
+            "No clipboard tool found (install wl-clipboard, xclip, or xsel)",
             file=sys.stderr,
         )
-        return False
-    subprocess.run(cmd, input=text.encode(), check=True)
-    return True
+    else:
+        print(
+            "Clipboard copy failed (no display?). On Wayland, install wl-clipboard.",
+            file=sys.stderr,
+        )
+    return False
 
 
 def confirm_and_execute(command: str) -> None:
@@ -204,7 +232,13 @@ def confirm_and_execute(command: str) -> None:
     import subprocess
 
     try:
-        answer = input("Run? [y/N] ").strip().lower()
+        if sys.stdout.isatty():
+            from rich.console import Console
+
+            answer = Console().input("[bold yellow]Run?[/] [dim]\\[y/N][/] ")
+        else:
+            answer = input("Run? [y/N] ")
+        answer = answer.strip().lower()
     except (KeyboardInterrupt, EOFError):
         print()
         return

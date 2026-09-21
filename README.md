@@ -57,6 +57,13 @@ quoting.
 | `-c` | Copy the output to the clipboard                               |
 | `-x` | Execute the returned command (cmd mode only, with confirmation)|
 
+### Styled output
+
+When stdout is a terminal, `rtdm` styles its output: commands get a colored
+gutter bar, and `-e`/`-q` answers render in a bordered panel. The moment output
+is piped or redirected (`rtdm ... | bash`, `-x`, `-c`), the raw text is used
+instead — so styling never touches a command you execute, copy, or pipe onward.
+
 ### Subcommands
 
 Account self-service for hosted-mode users. All require remote mode
