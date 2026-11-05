@@ -99,6 +99,144 @@ def _stream_response(resp: http.client.HTTPResponse, live: bool = True) -> str:
     return strip_control_chars("".join(chunks))
 
 
+# BEGIN rtdm OpenAI-compatible backend
+def _chat_openai_compatible(
+    system_prompt: str, user_input: str, cfg: LocalConfig, live: bool = True
+) -> str:
+    """Call an OpenAI-compatible /v1/chat/completions endpoint using SSE."""
+    base_url = (cfg.openai_base_url or "").strip()
+    if not base_url:
+        raise LocalBackendError(
+            "OpenAI-compatible proxy URL not configured. Set --proxy-url, "
+            "or add openai_base_url to [local] in ~/.config/rtdm/config.toml"
+        )
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise LocalBackendError(
+            "Invalid proxy URL; expected an http(s) URL such as "
+            "http://127.0.0.1:1234/v1."
+        )
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise LocalBackendError(
+            "Proxy URL must not contain credentials, query, or fragment."
+        )
+    host = parsed.hostname
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise LocalBackendError(f"Invalid proxy URL: {exc}") from exc
+
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/v1"):
+        path = f"{path}/v1" if path else "/v1"
+    request_path = f"{path}/chat/completions"
+
+    api_key = (cfg.openai_api_key or "").strip()
+    if api_key and parsed.scheme != "https" and host.lower() not in {
+        "localhost", "127.0.0.1", "::1"
+    }:
+        raise LocalBackendError(
+            "Refusing to send proxy API key over plain HTTP to a non-local host; use HTTPS."
+        )
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    body = json.dumps(
+        {
+            "model": cfg.openai_model or cfg.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            "stream": True,
+        }
+    ).encode("utf-8")
+
+    conn: http.client.HTTPConnection | None = None
+    try:
+        if parsed.scheme == "https":
+            conn = http.client.HTTPSConnection(host, port, timeout=60)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=60)
+        conn.request("POST", request_path, body=body, headers=headers)
+        resp = conn.getresponse()
+        if resp.status != 200:
+            error_body = resp.read()
+            try:
+                payload = json.loads(error_body)
+                error = payload.get("error") if isinstance(payload, dict) else None
+                if isinstance(error, dict):
+                    error = error.get("message")
+                detail = str(error) if error else error_body.decode("utf-8", "replace")
+            except (ValueError, UnicodeDecodeError):
+                detail = error_body.decode("utf-8", "replace")
+            raise LocalBackendError(
+                f"OpenAI-compatible API error (HTTP {resp.status}): "
+                f"{strip_control_chars(detail[:1000])}"
+            )
+
+        chunks: list[str] = []
+        while True:
+            line = resp.readline()
+            if not line:
+                break
+            line = line.decode("utf-8", errors="replace").strip()
+            if not line or line.startswith(":") or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data:
+                continue
+            if data == "[DONE]":
+                break
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("error"):
+                error = event["error"]
+                if isinstance(error, dict):
+                    error = error.get("message", "unknown streaming error")
+                raise LocalBackendError(
+                    "OpenAI-compatible streaming error: "
+                    + strip_control_chars(str(error))
+                )
+            choices = event.get("choices") or []
+            if not choices or not isinstance(choices[0], dict):
+                continue
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content") or ""
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            if isinstance(content, str) and content:
+                content = strip_control_chars(content)
+                if live:
+                    print(content, end="", flush=True)
+                chunks.append(content)
+        if live:
+            print()
+        return strip_control_chars("".join(chunks))
+    except (OSError, ConnectionError) as exc:
+        raise LocalBackendError(
+            "Could not connect to the configured OpenAI-compatible server. "
+            "Check --proxy-url / openai_base_url and that the server is running."
+        ) from exc
+    finally:
+        if conn is not None:
+            conn.close()
+# END rtdm OpenAI-compatible backend
+
+
 def _chat(system_prompt: str, user_input: str, cfg: LocalConfig, live: bool = True) -> str:
     """POST to Ollama's /api/chat and stream the result.
 
@@ -107,6 +245,9 @@ def _chat(system_prompt: str, user_input: str, cfg: LocalConfig, live: bool = Tr
     underlying exception, which the CLI top level prints with a
     friendly message.
     """
+    if cfg.openai_base_url:
+        return _chat_openai_compatible(system_prompt, user_input, cfg, live=live)
+
     parsed = urlparse(cfg.ollama_url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 11434
