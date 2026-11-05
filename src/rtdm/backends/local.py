@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import os
 import sys
 from urllib.parse import urlparse
 
@@ -105,34 +104,39 @@ def _chat_openai_compatible(
     system_prompt: str, user_input: str, cfg: LocalConfig, live: bool = True
 ) -> str:
     """Call an OpenAI-compatible /v1/chat/completions endpoint using SSE."""
-    base_url = os.environ.get("RTDM_OPENAI_BASE_URL", "").strip()
+    base_url = (cfg.openai_base_url or "").strip()
+    if not base_url:
+        raise LocalBackendError(
+            "OpenAI-compatible proxy URL not configured. Set --proxy-url, "
+            "or add openai_base_url to [local] in ~/.config/rtdm/config.toml"
+        )
     parsed = urlparse(base_url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise LocalBackendError(
-            "Invalid RTDM_OPENAI_BASE_URL; expected an http(s) URL such as "
+            "Invalid proxy URL; expected an http(s) URL such as "
             "http://127.0.0.1:1234/v1."
         )
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise LocalBackendError(
-            "RTDM_OPENAI_BASE_URL must not contain credentials, query, or fragment."
+            "Proxy URL must not contain credentials, query, or fragment."
         )
     host = parsed.hostname
     try:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
     except ValueError as exc:
-        raise LocalBackendError(f"Invalid RTDM_OPENAI_BASE_URL: {exc}") from exc
+        raise LocalBackendError(f"Invalid proxy URL: {exc}") from exc
 
     path = parsed.path.rstrip("/")
     if not path.endswith("/v1"):
         path = f"{path}/v1" if path else "/v1"
     request_path = f"{path}/chat/completions"
 
-    api_key = os.environ.get("RTDM_LOCAL_API_KEY", "").strip()
+    api_key = (cfg.openai_api_key or "").strip()
     if api_key and parsed.scheme != "https" and host.lower() not in {
         "localhost", "127.0.0.1", "::1"
     }:
         raise LocalBackendError(
-            "Refusing to send RTDM_LOCAL_API_KEY over plain HTTP to a non-local host; use HTTPS."
+            "Refusing to send proxy API key over plain HTTP to a non-local host; use HTTPS."
         )
 
     headers = {
@@ -144,7 +148,7 @@ def _chat_openai_compatible(
 
     body = json.dumps(
         {
-            "model": os.environ.get("RTDM_OPENAI_MODEL") or cfg.model,
+            "model": cfg.openai_model or cfg.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input},
@@ -225,7 +229,7 @@ def _chat_openai_compatible(
     except (OSError, ConnectionError) as exc:
         raise LocalBackendError(
             "Could not connect to the configured OpenAI-compatible server. "
-            "Check RTDM_OPENAI_BASE_URL and that the server is running."
+            "Check --proxy-url / openai_base_url and that the server is running."
         ) from exc
     finally:
         if conn is not None:
@@ -241,8 +245,7 @@ def _chat(system_prompt: str, user_input: str, cfg: LocalConfig, live: bool = Tr
     underlying exception, which the CLI top level prints with a
     friendly message.
     """
-    openai_base_url = os.environ.get("RTDM_OPENAI_BASE_URL")
-    if openai_base_url:
+    if cfg.openai_base_url:
         return _chat_openai_compatible(system_prompt, user_input, cfg, live=live)
 
     parsed = urlparse(cfg.ollama_url)

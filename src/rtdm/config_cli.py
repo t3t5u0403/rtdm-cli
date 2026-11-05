@@ -77,6 +77,13 @@ def run_show() -> int:
     print("[local]")
     print(f"ollama_url = {cfg.local.ollama_url!r}")
     print(f"model = {cfg.local.model!r}")
+    if cfg.local.openai_base_url:
+        print(f"openai_base_url = {cfg.local.openai_base_url!r}")
+    if cfg.local.openai_api_key:
+        masked = cfg.local.openai_api_key[:10] + "…"
+        print(f"openai_api_key = {masked!r}  # truncated; this is just for display")
+    if cfg.local.openai_model:
+        print(f"openai_model = {cfg.local.openai_model!r}")
     return 0
 
 
@@ -170,6 +177,17 @@ def run_init() -> int:
         ollama_url = _ask("ollama URL", DEFAULT_OLLAMA_URL)
         model = _ask("ollama model", DEFAULT_OLLAMA_MODEL)
 
+    # Optional OpenAI-compatible proxy settings (for local LLM servers like llama.cpp, vLLM, etc.)
+    print()
+    print("Optional: configure an OpenAI-compatible proxy (e.g. llama.cpp, vLLM, LocalAI)")
+    print("Leave blank to use Ollama directly.")
+    proxy_url = _ask("proxy URL (e.g. http://localhost:8080/v1)", "")
+    proxy_api_key = ""
+    proxy_model = ""
+    if proxy_url:
+        proxy_api_key = _ask("proxy API key (optional)", "")
+        proxy_model = _ask("proxy model (optional)", "")
+
     _write_config(
         path,
         mode=mode,
@@ -177,6 +195,9 @@ def run_init() -> int:
         endpoint=endpoint,
         ollama_url=ollama_url,
         model=model,
+        openai_base_url=proxy_url,
+        openai_api_key=proxy_api_key,
+        openai_model=proxy_model,
     )
     print(f"Saved.  Config written to {path}")
     return 0
@@ -190,6 +211,9 @@ def _write_config(
     endpoint: str,
     ollama_url: str,
     model: str,
+    openai_base_url: str = "",
+    openai_api_key: str = "",
+    openai_model: str = "",
 ) -> None:
     """Write the config file atomically-ish, with parents created.
 
@@ -206,6 +230,9 @@ def _write_config(
         endpoint=endpoint,
         ollama_url=ollama_url,
         model=model,
+        openai_base_url=openai_base_url,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model,
     )
     path.write_text(body, encoding="utf-8")
     # Tighten perms — the API key is a credential.
@@ -223,6 +250,9 @@ def _render_toml(
     endpoint: str,
     ollama_url: str,
     model: str,
+    openai_base_url: str = "",
+    openai_api_key: str = "",
+    openai_model: str = "",
 ) -> str:
     """Render the config as a TOML document.
 
@@ -245,6 +275,12 @@ def _render_toml(
         "[local]",
         f"ollama_url = {s(ollama_url)}",
         f"model = {s(model)}",
-        "",
     ]
+    if openai_base_url:
+        lines.append(f"openai_base_url = {s(openai_base_url)}")
+    if openai_api_key:
+        lines.append(f"openai_api_key = {s(openai_api_key)}")
+    if openai_model:
+        lines.append(f"openai_model = {s(openai_model)}")
+    lines.append("")
     return "\n".join(lines)

@@ -80,6 +80,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="execute the returned command (cmd mode only, with confirmation)",
     )
     parser.add_argument(
+        "--proxy-url",
+        dest="proxy_url",
+        metavar="URL",
+        help="OpenAI-compatible proxy base URL (e.g. http://localhost:8080/v1)",
+    )
+    parser.add_argument(
+        "--proxy-api-key",
+        dest="proxy_api_key",
+        metavar="KEY",
+        help="API key for the OpenAI-compatible proxy",
+    )
+    parser.add_argument(
+        "--proxy-model",
+        dest="proxy_model",
+        metavar="MODEL",
+        help="Model name for the OpenAI-compatible proxy",
+    )
+    parser.add_argument(
         "query",
         nargs="*",
         help="natural-language query; multi-word, no quotes needed",
@@ -206,6 +224,22 @@ def main(argv: list[str] | None = None) -> int:
         # a traceback here would just bury it.
         print(f"rtdm: {exc}", file=sys.stderr)
         return 1
+
+    # CLI proxy options override config file settings
+    if args.proxy_url or args.proxy_api_key or args.proxy_model:
+        local = cfg.local
+        cfg = config_module.Config(
+            mode=cfg.mode,
+            remote=cfg.remote,
+            local=config_module.LocalConfig(
+                ollama_url=local.ollama_url,
+                model=local.model,
+                openai_base_url=args.proxy_url or local.openai_base_url,
+                openai_api_key=args.proxy_api_key or local.openai_api_key,
+                openai_model=args.proxy_model or local.openai_model,
+            ),
+            source=cfg.source,
+        )
     task = _resolve_task(args)
     user_input = " ".join(args.query)
 

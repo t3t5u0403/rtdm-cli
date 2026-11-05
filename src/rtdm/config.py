@@ -117,6 +117,10 @@ class RemoteConfig:
 class LocalConfig:
     ollama_url: str = DEFAULT_OLLAMA_URL
     model: str = DEFAULT_OLLAMA_MODEL
+    # OpenAI-compatible proxy settings (for local LLM servers like llama.cpp, vLLM, etc.)
+    openai_base_url: str | None = None
+    openai_api_key: str | None = None
+    openai_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -195,9 +199,15 @@ def load_config(path: Path | None = None) -> Config:
         local_section = {}
     ollama_url = local_section.get("ollama_url") or DEFAULT_OLLAMA_URL
     model = local_section.get("model") or DEFAULT_OLLAMA_MODEL
+    openai_base_url = local_section.get("openai_base_url")
+    openai_api_key = local_section.get("openai_api_key")
+    openai_model = local_section.get("openai_model")
     local = LocalConfig(
         ollama_url=ollama_url if isinstance(ollama_url, str) else DEFAULT_OLLAMA_URL,
         model=model if isinstance(model, str) else DEFAULT_OLLAMA_MODEL,
+        openai_base_url=openai_base_url if isinstance(openai_base_url, str) else None,
+        openai_api_key=openai_api_key if isinstance(openai_api_key, str) else None,
+        openai_model=openai_model if isinstance(openai_model, str) else None,
     )
 
     # Env override, last so it wins.  Anything other than "local" /
